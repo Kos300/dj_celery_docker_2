@@ -1,0 +1,257 @@
+Постановщик задачи будет активно 
+опрашивать Celery о готовности задачи
+(poll - опрос / pull - вытягивать, режим)
+Как получит ответ - выполнит какие-либо действия. 
+
+Django Rest Framework 
+2 end point
+- постановка задачи 
+- отслеживание статуса
+
+
+НАЧАЛО в командной строке. 
+
+
+mk dir dj_celery_docker_2
+
+cd dj_celery_docker_2
+
+type nul > notes.txt
+
+клонируем проект с git hub
+в директории dj_celery_docker_2>
+git clone https://github.com/Kos300/dj_celery_docker_1.git .
+(с точкой в конце, чтобы не создавать директорию)
+
+
+cd webapp
+
+создать окружение
+webapp>
+python -m venv env
+
+активировать его
+env\Scripts\activate
+
+установить все зависимости
+webapp>
+pip install -r .\requirements.txt
+
+установить Django REST framework
+https://www.django-rest-framework.org/ 
+pip install djangorestframework
+
+добавить в settings
+INSTALLED_APPS = [
+    ...
+    'rest_framework',
+]
+
+разрешить отвечать DRF на запросы 
+от внешних источников 
+установить CORS и настроить
+python -m pip install django-cors-headers
+(https://github.com/adamchainz/django-cors-headers)
+
+добавить в settings
+'corsheaders',
+добавить в MIDDLEWARE (выше чем common middleware)
+"corsheaders.middleware.CorsMiddleware",
+
+настройка - доступ всем клиентам обращаться
+(НЕ БЕЗОПАСНО!!!) добавить в settings
+CORS_ALLOW_ALL_ORIGINS = True
+
+
+доп настройка Celery
+хранить рез выполнения задач
+(иначе статус не отследить)
+https://docs.celeryq.dev/en/stable/getting-started/first-steps-with-celery.html#keeping-results
+в settings - указать где хранитиь результаты 
+выполнения задач
+CELERY_RESULT_BACKEND = 'redis://redis:6379'
+
+
+создать новую задачу в Tasks
+# аналог задачи занимающей время процессора
+# и блокирующей исполнение друних задач
+# cpu intensive 
+import time
+from random import randint
+@shared_task - чтобы стала задачей Celery
+def cpu_task():
+    time_to_sleep = randint(5, 70) - случайное время в сек в указанном диапазоне. 
+    time.sleep(time_to_sleep) - для засыпания
+    return f"I slept for {time_to_sleep} secs"
+
+добавить в settings
+# Celery Configuration Options
+CELERY_TIMEZONE = "Europe/Moscow" 
+CELERY_TASK_TRACK_STARTED = True (отслеживать запущенные задачи)
+CELERY_TASK_TIME_LIMIT = 30 * 60 (ограничение времени подвисших задач)
+
+обновить зависимости
+webapp>
+pip freeze > requirements.txt
+
+запускаем контейнеры
+ОК.
+
+заходим в контейнер с Продюсером. 
+в новом терминале
+docker container ls = список контейнеров
+docker ps = или.
+
+подключиться к контейнеру b2dec15b2339 
+docker exec -ti b2dec15b2339 /bin/sh
+появится #
+
+dir = содержимое директории
+cd src
+
+запускаем
+python manage.py shell
+появится >>>
+
+импортируем = from main.tasks import cpu_task
+
+запускаем с методом .delay()
+>>> cpu_task.delay()
+получим асинхронный результат
+(обещание)
+>>> cpu_task.delay()
+<AsyncResult: f023eb97-afcb-44dd-8336-f80ff8e263d8>
+сохраним в переменную 
+res = cpu_task.delay()
+и вызовем его
+>>> res = cpu_task.delay()
+>>> res
+<AsyncResult: 14dd2d08-2d38-4337-880c-c5fe5bbec01c>
+проверим состояние
+>>> res.state
+'STARTED' = в работе
+>>> res.state
+'SUCCESS' = выполнено
+узнаем id задачи
+>>> res.id
+'14dd2d08-2d38-4337-880c-c5fe5bbec01c'
+узнаем результат
+в работе
+>>> res.result
+{'pid': 11, 'hostname': 'celery@cea4484ab0a9'}
+узнаем результат
+выполненной
+>>> res.result
+'I slept for 30 secs'
+ОК - задача работает!
+
+
+теперь сделаем это со стороны клиента
+через веб браузер. 
+Создадим 2 сервиса для:
+- создания задач
+- опроса о состоянии задач
+
+в views.py
+from celery.result import AsyncResult
+
+from rest_framework.views import APIView = базовый класс
+from rest_framework.response import Response = класс ответа
+from main.tasks import cpu_task
+
+создаем класс для постановки задачи
+class TaskSetter(APIView):
+    # authentication_classes = [authentication.]
+    def get(self, request, format=None):
+        """
+        Return a list of all users.
+        """
+        res = tasks.cpu_task.delay()
+        return Response(res.id)
+
+добавить путь в URL
+path('settask/', views.TaskSetter.as_view()),
+
+
+запустить
+docker-compose up --build
+остановить? Ctrl+C
+
+ok
+по url - settask
+видим страницу с ответом и id задачи.
+
+далее
+во views добавили класс TaskGetter
+добавили url - gettask
+
+settask дает такой ответ
+Task Setter
+GET /settask/
+HTTP 200 OK
+Allow: GET, HEAD, OPTIONS
+Content-Type: application/json
+Vary: Accept
+"3d53ab8e-bc20-4c46-ad55-6827e040bf99"
+
+пробуем по url - gettask
+передать id задачи в url в виде
+http://localhost:8000/gettask/?task_id=3d53ab8e-bc20-4c46-ad55-6827e040bf99
+
+получаем вывод
+Task Getter
+GET /gettask/?task_id=c939cfff-d00d-4e24-bfe1-23da054a872d
+HTTP 200 OK
+Allow: GET, HEAD, OPTIONS
+Content-Type: application/json
+Vary: Accept
+"STARTED"
+...при послед обновлениях статус сменился на "SUCCESS"
+
+создали папку templates и main
+и в ней файл шаблона html (5)
+выбрали из выпадающего списка при вводе html.
+(кнопка и заголовок добавлены)
+
+добавили в кнопку onclick и ссылку на функцию
+
+ниже добавили функцию <script>
+с выводом сообщ в лог
+
+проверили работу на странице, выводит в console
+
+для обращения к енд поинту используем
+клиент axios
+https://github.com/axios/axios
+раздел install через CDN
+<script src="https://cdn.jsdelivr.net/npm/axios@1.1.2/dist/axios.min.js"></script>
+динамическая загрузка кода из сети.
+вставили перед title
+
+дописали функцию, теперь при нажатии кнопки, возвращается id поставленной задачи. (проверили через console.log(res.data);)
+
+теперь получим список элементов
+let tasklist = document.getElementById("tasks")
+...
+получили вывод красного списка задач.
+
+добавим код отслеживания состояния.
+функцией checker
+
+красный список выводит, зеленеет
+и удаляет через 3 секунды функцией deleter.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

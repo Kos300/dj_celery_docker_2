@@ -1,8 +1,10 @@
 import requests as requests
 import uuid # для генерации случайных имен файлов
+import time
 from django.conf import settings
-
 from celery import shared_task
+from random import randint
+
 
 # Create your tasks here
 
@@ -27,3 +29,11 @@ def download_a_cat():
             f.write(chunk)
 
     return True
+
+
+@shared_task
+def cpu_task():
+    time_to_sleep = randint(5, 70)
+    time.sleep(time_to_sleep)
+    return f"I slept for {time_to_sleep} secs"
+

@@ -21,4 +21,6 @@ from main import views
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', views.home),
+    path('settask/', views.TaskSetter.as_view()),
+    path('gettask/', views.TaskGetter.as_view()),
 ]
